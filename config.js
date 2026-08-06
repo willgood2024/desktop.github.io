@@ -13,17 +13,17 @@ window.EXAM_CONFIG = {
     multiple: 10,               // 多选题默认分值
     judge: 10                   // 判断题默认分值
   },
-  passScore: 60,                // 及格线（满分100）
+  passScore: 80,                // 及格线（满分100）
 
   // ===== 倒计时 =====
   countdownEnabled: true,       // 是否启用倒计时
-  countdownSeconds: 900,        // 倒计时总时长（秒），900 = 15分钟
+  countdownSeconds: 900,        // 倒计时总时长（秒），900 = 5分钟
   autoSubmitOnTimeout: true,    // 倒计时结束时是否自动提交
 
   // ===== 二维码 =====
   // 部署到服务器后，填写实际访问地址（https://willgood2024.github.io/desktop.github.io/
   // 留空则自动使用当前页面 URL
-  baseUrl: 'https://willgood2024.github.io/desktop.github.io/',
+  baseUrl: '',
 
   // ===== 数据存储 =====
   storageKey: 'exam_records',  // localStorage 存储键名
