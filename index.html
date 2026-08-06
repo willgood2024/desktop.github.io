@@ -8,6 +8,7 @@
 <!-- 外部依赖 -->
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
 
 <!-- 配置与题库 -->
 <script src="config.js"></script>
@@ -752,7 +753,56 @@ body {
 @media print {
   body { background: #fff; }
   .app-container { box-shadow: none; max-width: 100%; }
-  .exam-nav-btns, .btn, #qrcode, .qr-section { display: none !important; }
+  .exam-nav-btns, .btn, #qrcode, .qr-section, .relay-card { display: none !important; }
+}
+
+/* ========== 成绩回传 ========== */
+.relay-card {
+  background: var(--bg);
+  border-radius: var(--radius);
+  padding: 20px;
+  margin-bottom: 20px;
+  text-align: center;
+}
+.relay-card .form-group { text-align: left; }
+
+/* ========== 弹窗 ========== */
+.modal-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.5);
+  display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 20px;
+}
+.modal-box {
+  background: #fff; border-radius: var(--radius); padding: 24px;
+  width: 100%; max-width: 420px; box-shadow: var(--shadow-lg);
+  max-height: 90vh; overflow-y: auto;
+}
+
+/* ========== 扫码收录 ========== */
+.scanner-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.85);
+  display: flex; align-items: center; justify-content: center; z-index: 1100; padding: 20px;
+}
+.scanner-box {
+  background: #fff; border-radius: var(--radius); padding: 20px;
+  width: 100%; max-width: 420px; text-align: center;
+}
+#scannerVideo {
+  width: 100%; border-radius: var(--radius-sm); background: #000; max-height: 50vh;
+}
+.scanner-status {
+  font-size: 13px; color: var(--text-secondary); margin: 12px 0;
+}
+
+/* ========== Toast ========== */
+.toast {
+  position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+  background: var(--success); color: #fff; padding: 12px 24px; border-radius: 24px;
+  font-weight: 600; font-size: 14px; box-shadow: var(--shadow-lg); z-index: 1200;
+  animation: toastIn 0.3s ease;
+}
+@keyframes toastIn {
+  from { opacity: 0; transform: translate(-50%, -10px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
 }
 </style>
 </head>
@@ -771,7 +821,7 @@ body {
     <div class="welcome-desc">
       本次考试将从题库中<span class="highlight">随机抽取10道题</span>，
       题型包含<span class="highlight">单选题、多选题、判断题</span>，
-      满分100分，及格线60分。请认真作答，祝您取得好成绩！
+      满分100分，及格线<span id="welcomePassScore">60</span>分。请认真作答，祝您取得好成绩！
     </div>
     <div class="form-group">
       <label for="inputName">请输入您的姓名</label>
@@ -847,6 +897,20 @@ body {
         <div class="value" id="resultCorrect">--</div>
       </div>
     </div>
+    <div class="relay-card" id="relayCard">
+      <div class="view-title" style="margin-bottom:12px;">成绩回传</div>
+      <p class="text-sm text-muted" style="margin-bottom:12px;">将下方二维码或链接发给管理员，即可把成绩收录到统计表。</p>
+      <div id="relayQrcode" style="display:inline-block;padding:8px;background:#fff;border-radius:8px;box-shadow:var(--shadow);"></div>
+      <div class="form-group mt-16">
+        <label>回传链接</label>
+        <div style="display:flex;gap:8px;">
+          <input type="text" id="relayLink" readonly style="flex:1;">
+          <button class="btn btn-outline btn-sm" onclick="App.copyRelayLink()">复制</button>
+        </div>
+      </div>
+      <div class="qr-hint" id="relayHint"></div>
+    </div>
+
     <div class="view-title">答题详情</div>
     <div class="detail-list" id="detailList"></div>
     <div class="btn-group">
@@ -862,8 +926,15 @@ body {
     <div class="btn-group">
       <button class="btn btn-success btn-sm" onclick="App.exportExcel()">导出 Excel</button>
       <button class="btn btn-danger btn-sm" onclick="App.clearRecords()">清空记录</button>
-      <button class="btn btn-outline btn-sm" onclick="App.goHome()">返回首页</button>
+      <button class="btn btn-outline btn-sm" onclick="App.openConfigEditor()">参数设置</button>
     </div>
+    <div class="btn-group">
+      <button class="btn btn-primary btn-sm" onclick="App.startScanner()">扫码收录</button>
+      <button class="btn btn-outline btn-sm" onclick="document.getElementById('importFile').click()">导入题库</button>
+      <button class="btn btn-outline btn-sm" onclick="App.downloadTemplate()">下载模板</button>
+      <button class="btn btn-outline btn-sm" onclick="App.restoreDefaultQuestions()">恢复默认题库</button>
+    </div>
+    <input type="file" id="importFile" accept=".json,.xlsx,.xls" style="display:none;" onchange="App.importQuestionsFromFile(this)">
     <div class="mt-16 admin-table-wrap" id="adminTableWrap">
       <div class="no-records">
         <span class="icon">&#128203;</span>
@@ -872,6 +943,48 @@ body {
     </div>
   </div>
 </div>
+
+<!-- ========== 参数设置弹窗 ========== -->
+<div class="modal-overlay" id="configModal" style="display:none;">
+  <div class="modal-box">
+    <div class="view-title">考试参数设置</div>
+    <div class="form-group">
+      <label for="cfgPassScore">及格线（分，0-100）</label>
+      <input type="number" id="cfgPassScore" min="0" max="100">
+    </div>
+    <div class="form-group">
+      <label for="cfgPickCount">每次抽取题数</label>
+      <input type="number" id="cfgPickCount" min="1" max="50">
+    </div>
+    <div class="form-group">
+      <label for="cfgCountdown">倒计时时长（秒，0为不限时）</label>
+      <input type="number" id="cfgCountdown" min="0" max="7200">
+    </div>
+    <div class="form-group" style="display:flex;align-items:center;gap:8px;">
+      <input type="checkbox" id="cfgCountdownOn" style="width:auto;">
+      <label for="cfgCountdownOn" style="margin:0;font-weight:500;">启用倒计时</label>
+    </div>
+    <div class="btn-group">
+      <button class="btn btn-primary" onclick="App.saveConfig()">保存</button>
+      <button class="btn btn-outline" onclick="App.closeConfigEditor()">取消</button>
+    </div>
+  </div>
+</div>
+
+<!-- ========== 扫码收录弹窗 ========== -->
+<div class="scanner-overlay" id="scannerOverlay" style="display:none;">
+  <div class="scanner-box">
+    <div class="view-title">扫码收录成绩</div>
+    <video id="scannerVideo" playsinline></video>
+    <div class="scanner-status" id="scannerStatus">将学员的"成绩二维码"对准摄像头</div>
+    <div class="btn-group">
+      <button class="btn btn-danger" onclick="App.stopScanner()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- ========== Toast ========== -->
+<div class="toast" id="toast" style="display:none;"></div>
 
 <script>
 // ==================== 应用主逻辑 ====================
@@ -889,6 +1002,14 @@ const App = {
 
   // ---- 初始化 ----
   init() {
+    // 加载覆盖配置与题库（在线修改后持久化）
+    this.applyConfigOverride();
+    this.applyQuestionOverride();
+
+    // 欢迎页及格线动态显示
+    const wps = document.getElementById('welcomePassScore');
+    if (wps) wps.textContent = EXAM_CONFIG.passScore;
+
     // 管理入口：点击5次进入
     let clickCount = 0;
     const entry = document.getElementById('adminEntry');
@@ -915,10 +1036,21 @@ const App = {
       }
     });
 
+    // 成绩回传链接自动收录（优先于其他视图）
+    if (window.location.hash.indexOf('#result=') === 0) {
+      tryCollectFromHash();
+      return;
+    }
+
     // URL hash 检测
     if (window.location.hash === '#admin') {
       this.showView('admin');
     }
+
+    // 监听 hash 变化（用于扫码回传链接）
+    window.addEventListener('hashchange', () => {
+      if (window.location.hash.indexOf('#result=') === 0) tryCollectFromHash();
+    });
   },
 
   // ---- 视图切换 ----
@@ -1213,6 +1345,7 @@ const App = {
 
     // 渲染结果页
     this.renderResult(result, record);
+    this.renderRelay(record);
 
     this.showView('result');
   },
@@ -1432,8 +1565,361 @@ const App = {
     if (!confirm('再次确认：清空后将无法恢复，是否继续？')) return;
     Store.clear();
     this.showView('admin');
+  },
+
+  // ---- 成绩回传 ----
+  renderRelay(record) {
+    const baseUrl = EXAM_CONFIG.baseUrl || window.location.href.split('#')[0];
+    const compact = {
+      name: record.name,
+      startTime: record.startTime,
+      endTime: record.endTime,
+      duration: record.duration,
+      pickedQuestionIds: record.pickedQuestionIds,
+      answers: record.answers,
+      score: record.score,
+      totalScore: record.totalScore,
+      passed: record.passed
+    };
+    const encoded = utf8ToBase64Url(JSON.stringify(compact));
+    const link = baseUrl + '#result=' + encoded;
+    this._relayLink = link;
+    const container = document.getElementById('relayQrcode');
+    container.innerHTML = '';
+    if (typeof QRCode !== 'undefined') {
+      new QRCode(container, {
+        text: link, width: 160, height: 160,
+        colorDark: '#1e3a5f', colorLight: '#ffffff', correctLevel: QRCode.CorrectLevel.M
+      });
+    }
+    document.getElementById('relayLink').value = link;
+    const hint = document.getElementById('relayHint');
+    hint.textContent = baseUrl.startsWith('file://')
+      ? '提示：当前为本地文件，部署到服务器后管理员可扫码收录'
+      : '将此二维码/链接发给管理员即可收录成绩';
+  },
+
+  copyRelayLink() {
+    const link = this._relayLink || '';
+    if (!link) return;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(link)
+        .then(() => showToast('回传链接已复制'))
+        .catch(() => this._fallbackCopy(link));
+    } else {
+      this._fallbackCopy(link);
+    }
+  },
+
+  _fallbackCopy(text) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); showToast('回传链接已复制'); }
+    catch (e) { alert('复制失败，请手动复制'); }
+    document.body.removeChild(ta);
+  },
+
+  // ---- 扫码收录 ----
+  async startScanner() {
+    if (typeof jsQR === 'undefined') { alert('扫码库未加载，请检查网络连接'); return; }
+    const overlay = document.getElementById('scannerOverlay');
+    overlay.style.display = 'flex';
+    const video = document.getElementById('scannerVideo');
+    const status = document.getElementById('scannerStatus');
+    if (status) status.textContent = '将学员的"成绩二维码"对准摄像头';
+    try {
+      let stream;
+      try { stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } }); }
+      catch (e) { stream = await navigator.mediaDevices.getUserMedia({ video: true }); }
+      video.srcObject = stream;
+      await video.play();
+      this._scanStream = stream;
+      this._scanning = true;
+      this.scanLoop(video);
+    } catch (e) {
+      alert('无法打开摄像头：' + e.message);
+      overlay.style.display = 'none';
+    }
+  },
+
+  scanLoop(video) {
+    if (!this._scanning) return;
+    const canvas = this._scanCanvas || (this._scanCanvas = document.createElement('canvas'));
+    if (video.readyState === video.HAVE_ENOUGH_DATA) {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const code = jsQR(img.data, img.width, img.height);
+      if (code && code.data) {
+        const m = code.data.match(/#result=(.+)$/);
+        if (m) {
+          try {
+            const compact = JSON.parse(base64UrlToUtf8(m[1]));
+            if (collectResult(compact)) {
+              showToast('已收录：' + compact.name + ' - ' + compact.score + '分');
+            }
+          } catch (e) { /* 忽略无效扫码 */ }
+        }
+      }
+    }
+    requestAnimationFrame(() => this.scanLoop(video));
+  },
+
+  stopScanner() {
+    this._scanning = false;
+    if (this._scanStream) {
+      this._scanStream.getTracks().forEach(t => t.stop());
+      this._scanStream = null;
+    }
+    document.getElementById('scannerOverlay').style.display = 'none';
+    if (document.getElementById('viewAdmin').classList.contains('active')) this.renderAdmin();
+  },
+
+  // ---- 参数设置 ----
+  openConfigEditor() {
+    document.getElementById('cfgPassScore').value = EXAM_CONFIG.passScore;
+    document.getElementById('cfgPickCount').value = EXAM_CONFIG.pickCount;
+    document.getElementById('cfgCountdown').value = EXAM_CONFIG.countdownSeconds;
+    document.getElementById('cfgCountdownOn').checked = EXAM_CONFIG.countdownEnabled;
+    document.getElementById('configModal').style.display = 'flex';
+  },
+
+  closeConfigEditor() {
+    document.getElementById('configModal').style.display = 'none';
+  },
+
+  saveConfig() {
+    const passScore = parseInt(document.getElementById('cfgPassScore').value, 10);
+    const pickCount = parseInt(document.getElementById('cfgPickCount').value, 10);
+    const countdownSeconds = parseInt(document.getElementById('cfgCountdown').value, 10);
+    const countdownEnabled = document.getElementById('cfgCountdownOn').checked;
+    if (isNaN(passScore) || passScore < 0) { alert('及格线无效'); return; }
+    if (isNaN(pickCount) || pickCount < 1) { alert('抽题数无效'); return; }
+    if (isNaN(countdownSeconds) || countdownSeconds < 0) { alert('倒计时无效'); return; }
+    const maxQ = (window.QUESTIONS || []).length || pickCount;
+    EXAM_CONFIG.passScore = passScore;
+    EXAM_CONFIG.pickCount = Math.min(pickCount, maxQ);
+    EXAM_CONFIG.countdownSeconds = countdownSeconds;
+    EXAM_CONFIG.countdownEnabled = countdownEnabled;
+    this.saveConfigOverride();
+    const wps = document.getElementById('welcomePassScore');
+    if (wps) wps.textContent = passScore;
+    this.closeConfigEditor();
+    alert('参数已保存（刷新页面后仍生效）');
+  },
+
+  saveConfigOverride() {
+    try {
+      localStorage.setItem('exam_config_override', JSON.stringify({
+        passScore: EXAM_CONFIG.passScore,
+        pickCount: EXAM_CONFIG.pickCount,
+        countdownSeconds: EXAM_CONFIG.countdownSeconds,
+        countdownEnabled: EXAM_CONFIG.countdownEnabled
+      }));
+    } catch (e) {}
+  },
+
+  applyConfigOverride() {
+    try {
+      const raw = localStorage.getItem('exam_config_override');
+      if (raw) Object.assign(EXAM_CONFIG, JSON.parse(raw));
+    } catch (e) {}
+  },
+
+  // ---- 题库导入 ----
+  importQuestionsFromFile(input) {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    const name = file.name.toLowerCase();
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        let questions;
+        if (name.endsWith('.json')) {
+          questions = parseJsonQuestions(e.target.result);
+        } else if (name.endsWith('.xlsx') || name.endsWith('.xls')) {
+          questions = parseExcelQuestions(e.target.result);
+        } else {
+          alert('不支持的文件格式，请导入 .json 或 .xlsx');
+          return;
+        }
+        if (!questions || questions.length === 0) { alert('未解析到有效题目'); return; }
+        window.QUESTIONS = questions;
+        try { localStorage.setItem('exam_questions_override', JSON.stringify(questions)); } catch (err) {}
+        alert('成功导入 ' + questions.length + ' 道题目！');
+        this.showView('welcome');
+      } catch (err) {
+        alert('导入失败：' + err.message);
+      }
+    };
+    if (name.endsWith('.json')) reader.readAsText(file, 'utf-8');
+    else reader.readAsArrayBuffer(file);
+    input.value = '';
+  },
+
+  restoreDefaultQuestions() {
+    if (!confirm('恢复为默认题库（16道示例题）？当前导入的题库将被清除。')) return;
+    localStorage.removeItem('exam_questions_override');
+    location.reload();
+  },
+
+  applyQuestionOverride() {
+    try {
+      const raw = localStorage.getItem('exam_questions_override');
+      if (raw) {
+        const qs = JSON.parse(raw);
+        if (Array.isArray(qs) && qs.length) window.QUESTIONS = qs;
+      }
+    } catch (e) {}
+  },
+
+  downloadTemplate() {
+    if (typeof XLSX === 'undefined') { alert('Excel 库未加载，请检查网络连接'); return; }
+    const aoa = [
+      ['题型', '题目', '选项A', '选项B', '选项C', '选项D', '正确答案', '分值', '解析'],
+      ['single', '示例：以下说法正确的是？', 'A. 选项一', 'B. 选项二', 'C. 选项三', 'D. 选项四', '1', '10', '解析说明（选填）'],
+      ['multiple', '示例：以下哪些是正确的？（多选）', 'A. 项目一', 'B. 项目二', 'C. 项目三', 'D. 项目四', '0,2', '10', ''],
+      ['judge', '示例：火灾时应乘坐电梯逃生。', '正确', '错误', '', '', '1', '10', '火灾严禁乘电梯']
+    ];
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws['!cols'] = [{ wch: 10 }, { wch: 40 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 10 }, { wch: 6 }, { wch: 20 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '题库模板');
+    XLSX.writeFile(wb, '题库导入模板.xlsx');
   }
 };
+
+// ==================== 成绩回传 / 跨设备收录 ====================
+
+function utf8ToBase64Url(str) {
+  return btoa(unescape(encodeURIComponent(str)))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function base64UrlToUtf8(b64) {
+  b64 = b64.replace(/-/g, '+').replace(/_/g, '/');
+  while (b64.length % 4) b64 += '=';
+  return decodeURIComponent(escape(atob(b64)));
+}
+
+// 收录压缩成绩（不含题干，主机用本地题库重建明细）
+function collectResult(compact) {
+  const picked = (compact.pickedQuestionIds || [])
+    .map(id => (window.QUESTIONS || []).find(q => q.id === id))
+    .filter(Boolean);
+  if (picked.length === 0) {
+    alert('本地题库缺少对应题目，无法收录（请确认管理员与主考设备题库一致）');
+    return false;
+  }
+  const result = gradeExam(picked, compact.answers || {});
+  const fullRecord = {
+    id: 'rec_' + compact.endTime,
+    name: compact.name,
+    startTime: compact.startTime,
+    endTime: compact.endTime,
+    duration: compact.duration,
+    pickedQuestionIds: compact.pickedQuestionIds,
+    answers: compact.answers || {},
+    details: result.details,
+    score: compact.score != null ? compact.score : result.score,
+    totalScore: compact.totalScore != null ? compact.totalScore : result.totalScore,
+    passed: compact.passed != null ? compact.passed : result.passed
+  };
+  Store.add(fullRecord);
+  return true;
+}
+
+// 从 URL hash 自动收录（回传链接方式）
+function tryCollectFromHash() {
+  const h = window.location.hash;
+  if (h.indexOf('#result=') !== 0) return false;
+  try {
+    const compact = JSON.parse(base64UrlToUtf8(h.substring('#result='.length)));
+    const ok = collectResult(compact);
+    history.replaceState(null, '', window.location.href.split('#')[0]);
+    if (ok) {
+      showToast('已收录成绩：' + compact.name + ' - ' + compact.score + '分');
+      App.showView('admin');
+    }
+    return true;
+  } catch (e) {
+    alert('成绩回传链接解析失败');
+    history.replaceState(null, '', window.location.href.split('#')[0]);
+    return true;
+  }
+}
+
+// ==================== 题库解析 ====================
+
+function parseJsonQuestions(text) {
+  const data = JSON.parse(text);
+  if (!Array.isArray(data)) throw new Error('JSON 应为题目数组');
+  return data.map((q, i) => {
+    if (!q.type || !q.question || !Array.isArray(q.options) || !Array.isArray(q.answer)) {
+      throw new Error('第 ' + (i + 1) + ' 题字段不完整（需含 type/question/options/answer）');
+    }
+    return {
+      id: q.id != null ? q.id : (i + 1),
+      type: q.type,
+      question: String(q.question),
+      options: q.options.map(o => String(o)),
+      answer: q.answer.map(Number),
+      score: q.score != null ? Number(q.score) : undefined,
+      analysis: q.analysis != null ? String(q.analysis) : ''
+    };
+  });
+}
+
+function parseExcelQuestions(arrayBuffer) {
+  const wb = XLSX.read(arrayBuffer, { type: 'array' });
+  const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+  if (!rows.length) throw new Error('Excel 中无数据');
+  const typeMap = {
+    'single': 'single', '单选': 'single', '单选题': 'single',
+    'multiple': 'multiple', '多选': 'multiple', '多选题': 'multiple',
+    'judge': 'judge', '判断': 'judge', '判断题': 'judge'
+  };
+  return rows.map((r, i) => {
+    const rawType = String(r['题型'] || '').trim();
+    const type = typeMap[rawType] || rawType.toLowerCase();
+    if (!['single', 'multiple', 'judge'].includes(type)) {
+      throw new Error('第 ' + (i + 1) + ' 行题型无效：' + rawType);
+    }
+    const question = String(r['题目'] || '').trim();
+    const options = ['选项A', '选项B', '选项C', '选项D']
+      .map(k => r[k] != null ? String(r[k]).trim() : '')
+      .filter(o => o !== '');
+    let answer;
+    const ansRaw = String(r['正确答案'] || '').trim();
+    if (type === 'judge') {
+      if (options.length === 0) options.push('正确', '错误');
+      answer = [ansRaw === '1' || ansRaw === '错误' || ansRaw.toLowerCase() === 'b' ? 1 : 0];
+    } else {
+      answer = ansRaw.split(/[,，]/).map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n));
+    }
+    const score = r['分值'] != null && r['分值'] !== '' ? parseInt(r['分值'], 10) : undefined;
+    const analysis = r['解析'] != null ? String(r['解析']) : '';
+    if (!question) throw new Error('第 ' + (i + 1) + ' 行题目为空');
+    if (options.length < 2) throw new Error('第 ' + (i + 1) + ' 行选项不足两个');
+    if (answer.length === 0) throw new Error('第 ' + (i + 1) + ' 行正确答案无效');
+    return { id: i + 1, type, question, options, answer, score, analysis };
+  });
+}
+
+// ==================== Toast ====================
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  if (!t) return;
+  t.textContent = msg;
+  t.style.display = 'block';
+  clearTimeout(window._toastTimer);
+  window._toastTimer = setTimeout(() => { t.style.display = 'none'; }, 2500);
+}
 
 // ==================== 工具函数 ====================
 
@@ -1505,6 +1991,7 @@ const Store = {
   },
   add(record) {
     const records = this.load();
+    if (records.some(r => r.id === record.id)) return; // 去重（同一成绩不重复收录）
     records.push(record);
     this.save(records);
   },
