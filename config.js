@@ -29,5 +29,5 @@ window.EXAM_CONFIG = {
   storageKey: 'exam_records',  // localStorage 存储键名
 
   // ===== 管理入口 =====
-  adminPin: '112113'                  // 管理页 PIN 码，留空则无需密码
+  adminPin: ''                  // 管理页 PIN 码，留空则无需密码
 };
