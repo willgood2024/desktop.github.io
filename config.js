@@ -21,7 +21,7 @@ window.EXAM_CONFIG = {
   autoSubmitOnTimeout: true,    // 倒计时结束时是否自动提交
 
   // ===== 二维码 =====
-  // 部署到服务器后，填写实际访问地址（如 "http://192.168.1.100:8080" 或 "https://willgood2024.github.io/desktop.github.io/"）
+  // 部署到服务器后，填写实际访问地址（https://willgood2024.github.io/desktop.github.io/
   // 留空则自动使用当前页面 URL
   baseUrl: 'https://willgood2024.github.io/desktop.github.io/',
 
