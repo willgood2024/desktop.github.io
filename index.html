@@ -819,9 +819,11 @@ body {
   <div class="view active" id="viewWelcome">
     <div class="view-title">欢迎参加培训考试</div>
     <div class="welcome-desc">
-      本次考试将从题库中<span class="highlight">随机抽取10道题</span>，
+      本次考试将从题库中随机抽取 <span class="highlight" id="welcomePickCount">10</span> 道题
+      （题库共 <span id="welcomeTotalCount">16</span> 题），
       题型包含<span class="highlight">单选题、多选题、判断题</span>，
-      满分100分，及格线<span id="welcomePassScore">60</span>分。请认真作答，祝您取得好成绩！
+      满分100分，及格线<span id="welcomePassScore">60</span>分。
+      <span id="welcomeRequiredNote"></span>请认真作答，祝您取得好成绩！
     </div>
     <div class="form-group">
       <label for="inputName">请输入您的姓名</label>
@@ -1006,9 +1008,8 @@ const App = {
     this.applyConfigOverride();
     this.applyQuestionOverride();
 
-    // 欢迎页及格线动态显示
-    const wps = document.getElementById('welcomePassScore');
-    if (wps) wps.textContent = EXAM_CONFIG.passScore;
+    // 欢迎页动态信息（题数/题型/及格线/必答提示）
+    this.renderWelcomeInfo();
 
     // 管理入口：点击5次进入
     let clickCount = 0;
@@ -1045,6 +1046,9 @@ const App = {
     // URL hash 检测
     if (window.location.hash === '#admin') {
       this.showView('admin');
+    } else if (localStorage.getItem('exam_last_view') === 'admin') {
+      // 视图记忆：上次停留在管理页则恢复（无明确 hash 时）
+      this.showView('admin');
     }
 
     // 监听 hash 变化（用于扫码回传链接）
@@ -1058,8 +1062,42 @@ const App = {
     document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
     const target = document.getElementById('view' + name.charAt(0).toUpperCase() + name.slice(1));
     if (target) target.classList.add('active');
+    // 视图记忆：仅记住管理页（其他视图刷新后回到欢迎页，符合预期）
+    try {
+      if (name === 'admin') localStorage.setItem('exam_last_view', 'admin');
+      else localStorage.removeItem('exam_last_view');
+    } catch (e) {}
     // 进管理页时刷新
     if (name === 'admin') this.renderAdmin();
+  },
+
+  // ---- 欢迎页动态信息（题数/题型/及格线/必答提示，随配置与题库同步）----
+  renderWelcomeInfo() {
+    try {
+      const all = window.QUESTIONS || [];
+      const total = all.length;
+      const pick = total > 0 ? Math.min(EXAM_CONFIG.pickCount || total, total) : (EXAM_CONFIG.pickCount || 0);
+
+      const passEl = document.getElementById('welcomePassScore');
+      if (passEl) passEl.textContent = EXAM_CONFIG.passScore;
+      const pkEl = document.getElementById('welcomePickCount');
+      if (pkEl) pkEl.textContent = pick;
+      const totEl = document.getElementById('welcomeTotalCount');
+      if (totEl) totEl.textContent = total;
+
+      const reqNote = document.getElementById('welcomeRequiredNote');
+      if (reqNote) {
+        const reqN = all.filter(isRequiredQuestion).length;
+        if (reqN > 0 && EXAM_CONFIG.requiredMin > 0) {
+          const need = Math.min(EXAM_CONFIG.requiredMin, reqN);
+          reqNote.textContent = '本次含必答题，至少抽中 ' + need + ' 题。';
+          reqNote.style.display = '';
+        } else {
+          reqNote.textContent = '';
+          reqNote.style.display = 'none';
+        }
+      }
+    } catch (e) {}
   },
 
   // ---- 准备考试（欢迎页 → 准备页）----
