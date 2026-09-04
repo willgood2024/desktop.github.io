@@ -4,8 +4,9 @@
  */
 window.EXAM_CONFIG = {
   // ===== 题库与抽题 =====
-  totalQuestions: 16,           // 题库总数
-  pickCount: 10,                // 每次随机抽取题目数
+  // 题库题数无上限，实际题数由 questions.js 或导入的题库自动决定（管理页可查看）
+  pickCount: 10,                // 每次随机抽取题目数（超过题库总数时自动取全部）
+  requiredMin: 1,               // 每次抽题至少抽中的"必答题"数量（0 = 不启用必答机制）
 
   // ===== 分值设置 =====
   defaultScore: {

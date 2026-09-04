@@ -1472,7 +1472,7 @@ const App = {
 
   // ---- 导出 Excel ----
   exportExcel() {
-    const records = Store.load();
+    const records = Store.load().map(normalizeRecord);
     if (records.length === 0) {
       alert('暂无考试记录，无法导出！');
       return;
@@ -1570,33 +1570,43 @@ const App = {
   // ---- 成绩回传 ----
   renderRelay(record) {
     const baseUrl = EXAM_CONFIG.baseUrl || window.location.href.split('#')[0];
+    // v3 紧凑编码：题号用逗号串，每题答案用索引拼接串（大幅缩短，支持大题库）
+    const ids = record.pickedQuestionIds || [];
     const compact = {
-      name: record.name,
-      startTime: record.startTime,
-      endTime: record.endTime,
-      duration: record.duration,
-      pickedQuestionIds: record.pickedQuestionIds,
-      answers: record.answers,
-      score: record.score,
-      totalScore: record.totalScore,
-      passed: record.passed
+      v: 3,
+      n: record.name,
+      s: record.startTime,
+      e: record.endTime,
+      d: record.duration,
+      q: ids.join(','),
+      a: ids.map(id => (record.answers[id] || []).join('')),
+      sc: record.score,
+      rs: record.rawScore,
+      rt: record.rawTotal,
+      p: record.passed ? 1 : 0
     };
     const encoded = utf8ToBase64Url(JSON.stringify(compact));
     const link = baseUrl + '#result=' + encoded;
     this._relayLink = link;
     const container = document.getElementById('relayQrcode');
     container.innerHTML = '';
-    if (typeof QRCode !== 'undefined') {
+    const hint = document.getElementById('relayHint');
+    const MAX_QR_CHARS = 2300;                 // QR v40 + M 级安全阈值
+    if (encoded.length <= MAX_QR_CHARS && typeof QRCode !== 'undefined') {
       new QRCode(container, {
         text: link, width: 160, height: 160,
         colorDark: '#1e3a5f', colorLight: '#ffffff', correctLevel: QRCode.CorrectLevel.M
       });
+      hint.textContent = baseUrl.startsWith('file://')
+        ? '提示：当前为本地文件，部署到服务器后管理员可扫码收录'
+        : '将此二维码/链接发给管理员即可收录成绩';
+    } else {
+      // 题量过大时二维码容量不足，降级为链接回传（链接无长度限制）
+      container.innerHTML = '<div class="qr-fallback">题量较大（' + ids.length +
+        ' 题），已超出二维码容量<br>请使用下方「复制」按钮发送回传链接</div>';
+      hint.textContent = '回传链接无长度限制，题量再大也能正常收录';
     }
     document.getElementById('relayLink').value = link;
-    const hint = document.getElementById('relayHint');
-    hint.textContent = baseUrl.startsWith('file://')
-      ? '提示：当前为本地文件，部署到服务器后管理员可扫码收录'
-      : '将此二维码/链接发给管理员即可收录成绩';
   },
 
   copyRelayLink() {
@@ -1658,7 +1668,7 @@ const App = {
         const m = code.data.match(/#result=(.+)$/);
         if (m) {
           try {
-            const compact = JSON.parse(base64UrlToUtf8(m[1]));
+            const compact = decodeCompact(JSON.parse(base64UrlToUtf8(m[1])));
             if (collectResult(compact)) {
               showToast('已收录：' + compact.name + ' - ' + compact.score + '分');
             }
@@ -1685,6 +1695,23 @@ const App = {
     document.getElementById('cfgPickCount').value = EXAM_CONFIG.pickCount;
     document.getElementById('cfgCountdown').value = EXAM_CONFIG.countdownSeconds;
     document.getElementById('cfgCountdownOn').checked = EXAM_CONFIG.countdownEnabled;
+
+    const reqEl = document.getElementById('cfgRequiredMin');
+    if (reqEl) reqEl.value = EXAM_CONFIG.requiredMin != null ? EXAM_CONFIG.requiredMin : 0;
+
+    const all = window.QUESTIONS || [];
+    const reqN = all.filter(isRequiredQuestion).length;
+    const hint = document.getElementById('cfgRequiredHint');
+    if (hint) {
+      hint.textContent = '当前题库共 ' + all.length + ' 题，其中必答题 ' + reqN +
+                         ' 道；设为 0 表示不启用必答机制。';
+    }
+    const pickHint = document.getElementById('cfgPickHint');
+    if (pickHint) {
+      pickHint.textContent = '当前题库共 ' + all.length + ' 题；抽取数超过 ' + all.length +
+                             ' 时会自动取题库全部题目';
+    }
+
     document.getElementById('configModal').style.display = 'flex';
   },
 
@@ -1697,17 +1724,25 @@ const App = {
     const pickCount = parseInt(document.getElementById('cfgPickCount').value, 10);
     const countdownSeconds = parseInt(document.getElementById('cfgCountdown').value, 10);
     const countdownEnabled = document.getElementById('cfgCountdownOn').checked;
+    const requiredMin = parseInt(document.getElementById('cfgRequiredMin').value, 10);
     if (isNaN(passScore) || passScore < 0) { alert('及格线无效'); return; }
-    if (isNaN(pickCount) || pickCount < 1) { alert('抽题数无效'); return; }
+    if (isNaN(pickCount) || pickCount < 1) { alert('抽题数无效（需 ≥ 1）'); return; }
     if (isNaN(countdownSeconds) || countdownSeconds < 0) { alert('倒计时无效'); return; }
-    const maxQ = (window.QUESTIONS || []).length || pickCount;
+    if (isNaN(requiredMin) || requiredMin < 0) { alert('必答题数量无效'); return; }
+
+    const maxQ = (window.QUESTIONS || []).length;
     EXAM_CONFIG.passScore = passScore;
-    EXAM_CONFIG.pickCount = Math.min(pickCount, maxQ);
+    EXAM_CONFIG.pickCount = maxQ > 0 ? Math.min(pickCount, maxQ) : pickCount;
     EXAM_CONFIG.countdownSeconds = countdownSeconds;
     EXAM_CONFIG.countdownEnabled = countdownEnabled;
+    // 必答数上限：题库有必答题时才钳制，否则保留设置，等导入带必答的题库后自动生效
+    const maxReq = (window.QUESTIONS || []).filter(isRequiredQuestion).length;
+    EXAM_CONFIG.requiredMin = maxReq > 0
+      ? Math.min(Math.max(0, requiredMin), maxReq)
+      : Math.max(0, requiredMin);
+
     this.saveConfigOverride();
-    const wps = document.getElementById('welcomePassScore');
-    if (wps) wps.textContent = passScore;
+    this.renderWelcomeInfo();
     this.closeConfigEditor();
     alert('参数已保存（刷新页面后仍生效）');
   },
@@ -1718,7 +1753,8 @@ const App = {
         passScore: EXAM_CONFIG.passScore,
         pickCount: EXAM_CONFIG.pickCount,
         countdownSeconds: EXAM_CONFIG.countdownSeconds,
-        countdownEnabled: EXAM_CONFIG.countdownEnabled
+        countdownEnabled: EXAM_CONFIG.countdownEnabled,
+        requiredMin: EXAM_CONFIG.requiredMin
       }));
     } catch (e) {}
   },
@@ -1750,8 +1786,14 @@ const App = {
         if (!questions || questions.length === 0) { alert('未解析到有效题目'); return; }
         window.QUESTIONS = questions;
         try { localStorage.setItem('exam_questions_override', JSON.stringify(questions)); } catch (err) {}
+        // 抽题数不得超过新题库长度（导入更小题库时自动下调）
+        if (EXAM_CONFIG.pickCount > questions.length) {
+          EXAM_CONFIG.pickCount = questions.length;
+          this.saveConfigOverride();
+        }
+        this.renderWelcomeInfo();
         alert('成功导入 ' + questions.length + ' 道题目！');
-        this.showView('welcome');
+        this.showView('admin');      // 导入后停留在管理页
       } catch (err) {
         alert('导入失败：' + err.message);
       }
@@ -1780,13 +1822,14 @@ const App = {
   downloadTemplate() {
     if (typeof XLSX === 'undefined') { alert('Excel 库未加载，请检查网络连接'); return; }
     const aoa = [
-      ['题型', '题目', '选项A', '选项B', '选项C', '选项D', '正确答案', '分值', '解析'],
-      ['single', '示例：以下说法正确的是？', 'A. 选项一', 'B. 选项二', 'C. 选项三', 'D. 选项四', '1', '10', '解析说明（选填）'],
-      ['multiple', '示例：以下哪些是正确的？（多选）', 'A. 项目一', 'B. 项目二', 'C. 项目三', 'D. 项目四', '0,2', '10', ''],
-      ['judge', '示例：火灾时应乘坐电梯逃生。', '正确', '错误', '', '', '1', '10', '火灾严禁乘电梯']
+      ['题型', '题目', '选项A', '选项B', '选项C', '选项D', '正确答案', '分值', '解析', '必答'],
+      ['single', '示例：以下说法正确的是？', 'A. 选项一', 'B. 选项二', 'C. 选项三', 'D. 选项四', '1', '10', '解析说明（选填）', ''],
+      ['multiple', '示例：以下哪些是正确的？（多选）', 'A. 项目一', 'B. 项目二', 'C. 项目三', 'D. 项目四', '0,2', '10', '', '是'],
+      ['judge', '示例：火灾时应乘坐电梯逃生。', '正确', '错误', '', '', '1', '10', '火灾严禁乘电梯', '是']
     ];
     const ws = XLSX.utils.aoa_to_sheet(aoa);
-    ws['!cols'] = [{ wch: 10 }, { wch: 40 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 10 }, { wch: 6 }, { wch: 20 }];
+    ws['!cols'] = [{ wch: 10 }, { wch: 40 }, { wch: 14 }, { wch: 14 }, { wch: 14 },
+                   { wch: 14 }, { wch: 10 }, { wch: 6 }, { wch: 20 }, { wch: 6 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, '题库模板');
     XLSX.writeFile(wb, '题库导入模板.xlsx');
@@ -1806,28 +1849,75 @@ function base64UrlToUtf8(b64) {
   return decodeURIComponent(escape(atob(b64)));
 }
 
+/** 解码回传成绩，兼容 v3(紧凑编码) / v2(百分制长字段) / v1(原始分老链接) */
+function decodeCompact(c) {
+  if (c && c.v === 3) {
+    const ids = String(c.q || '').split(',').filter(s => s !== '').map(Number);
+    const answers = {};
+    (c.a || []).forEach((s, i) => {
+      if (ids[i] == null) return;
+      answers[ids[i]] = String(s || '').split('').map(Number);   // "12" → [1,2]，"" → []
+    });
+    return {
+      v: 3,
+      name: c.n, startTime: c.s, endTime: c.e, duration: c.d,
+      pickedQuestionIds: ids, answers: answers,
+      score: c.sc, rawScore: c.rs, rawTotal: c.rt, passed: c.p === 1
+    };
+  }
+  if (c && c.v === 2) return Object.assign({}, c, { v: 2 });
+  return Object.assign({}, c, { v: 1 });    // v1: score/totalScore 即原始分
+}
+
 // 收录压缩成绩（不含题干，主机用本地题库重建明细）
+// 注意：入参必须是已过 decodeCompact() 的对象
 function collectResult(compact) {
-  const picked = (compact.pickedQuestionIds || [])
-    .map(id => (window.QUESTIONS || []).find(q => q.id === id))
-    .filter(Boolean);
+  const ids = compact.pickedQuestionIds || [];
+  const picked = ids.map(id => (window.QUESTIONS || []).find(q => q.id === id))
+                    .filter(Boolean);
   if (picked.length === 0) {
     alert('本地题库缺少对应题目，无法收录（请确认管理员与主考设备题库一致）');
     return false;
   }
-  const result = gradeExam(picked, compact.answers || {});
+
+  const local = gradeExam(picked, compact.answers || {});   // 本地重算（题库一致时的权威值）
+  const missing = ids.length - picked.length;               // 题库版本不一致时 > 0
+
+  let rawScore, rawTotal, score, passed;
+  if (missing > 0) {
+    // 题库不一致：无法本地重算全部，信任对方上报
+    if (compact.v === 3 || (compact.v === 2 && compact.rawScore != null && compact.rawTotal != null)) {
+      rawScore = Number(compact.rawScore) || 0;
+      rawTotal = Number(compact.rawTotal) || 0;
+      score = compact.score != null ? Number(compact.score) : toPercent(rawScore, rawTotal);
+    } else {
+      // v1 老链接：score/totalScore 是原始分
+      rawScore = Number(compact.score) || 0;
+      rawTotal = Number(compact.totalScore) || 0;
+      score = toPercent(rawScore, rawTotal);
+    }
+    passed = compact.passed != null ? compact.passed : (score >= EXAM_CONFIG.passScore);
+  } else {
+    rawScore = local.rawScore;
+    rawTotal = local.rawTotal;
+    score = local.score;
+    passed = local.passed;
+  }
+
   const fullRecord = {
     id: 'rec_' + compact.endTime,
     name: compact.name,
     startTime: compact.startTime,
     endTime: compact.endTime,
     duration: compact.duration,
-    pickedQuestionIds: compact.pickedQuestionIds,
+    pickedQuestionIds: ids,
     answers: compact.answers || {},
-    details: result.details,
-    score: compact.score != null ? compact.score : result.score,
-    totalScore: compact.totalScore != null ? compact.totalScore : result.totalScore,
-    passed: compact.passed != null ? compact.passed : result.passed
+    details: local.details,
+    score: score,
+    totalScore: 100,
+    rawScore: rawScore,
+    rawTotal: rawTotal,
+    passed: passed
   };
   Store.add(fullRecord);
   return true;
@@ -1838,7 +1928,7 @@ function tryCollectFromHash() {
   const h = window.location.hash;
   if (h.indexOf('#result=') !== 0) return false;
   try {
-    const compact = JSON.parse(base64UrlToUtf8(h.substring('#result='.length)));
+    const compact = decodeCompact(JSON.parse(base64UrlToUtf8(h.substring('#result='.length))));
     const ok = collectResult(compact);
     history.replaceState(null, '', window.location.href.split('#')[0]);
     if (ok) {
@@ -1869,7 +1959,8 @@ function parseJsonQuestions(text) {
       options: q.options.map(o => String(o)),
       answer: q.answer.map(Number),
       score: q.score != null ? Number(q.score) : undefined,
-      analysis: q.analysis != null ? String(q.analysis) : ''
+      analysis: q.analysis != null ? String(q.analysis) : '',
+      required: isRequiredQuestion(q) ? true : false
     };
   });
 }
@@ -1903,10 +1994,14 @@ function parseExcelQuestions(arrayBuffer) {
     }
     const score = r['分值'] != null && r['分值'] !== '' ? parseInt(r['分值'], 10) : undefined;
     const analysis = r['解析'] != null ? String(r['解析']) : '';
+    // 必答标记：兼容中文表头「必答」与英文表头「required」，未填/空值视为否
+    const reqRaw = (r['必答'] != null && r['必答'] !== '') ? String(r['必答'])
+                 : ((r['required'] != null && r['required'] !== '') ? String(r['required']) : '');
+    const required = isRequiredQuestion({ required: reqRaw });
     if (!question) throw new Error('第 ' + (i + 1) + ' 行题目为空');
     if (options.length < 2) throw new Error('第 ' + (i + 1) + ' 行选项不足两个');
     if (answer.length === 0) throw new Error('第 ' + (i + 1) + ' 行正确答案无效');
-    return { id: i + 1, type, question, options, answer, score, analysis };
+    return { id: i + 1, type, question, options, answer, score, analysis, required };
   });
 }
 
@@ -1923,32 +2018,124 @@ function showToast(msg) {
 
 // ==================== 工具函数 ====================
 
-/** Fisher-Yates 洗牌，随机抽取 count 道题 */
-function pickQuestions(allQuestions, count) {
-  const pool = [...allQuestions];
-  for (let i = pool.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [pool[i], pool[j]] = [pool[j], pool[i]];
-  }
-  return pool.slice(0, count).sort((a, b) => a.id - b.id);
+// ==================== 分数换算 ====================
+
+/** 原始分 → 百分制，保留 1 位小数；分母非法/为 0 时返回 0 */
+function toPercent(rawScore, rawTotal) {
+  const total = Number(rawTotal);
+  if (!isFinite(total) || total <= 0) return 0;
+  const s = Number(rawScore) || 0;
+  return Math.round((s / total) * 1000) / 10;
 }
 
-/** 判分 */
+/** 界面展示用：87.5 → "87.5"；87.0 → "87"（去掉无意义小数） */
+function formatScore(v) {
+  const n = Number(v) || 0;
+  return String(Math.round(n * 10) / 10);
+}
+
+/** Excel 导出用：保留数值类型（便于表格排序/计算） */
+function toScoreNumber(v) {
+  const n = Number(v) || 0;
+  return Math.round(n * 10) / 10;
+}
+
+/** 成绩记录归一化：兼容没有 rawScore/rawTotal 的历史记录 */
+function normalizeRecord(r) {
+  if (!r) return r;
+  if (r.rawScore != null && r.rawTotal != null) return r;   // 新格式，原样返回
+  const rawScore = Number(r.score) || 0;                    // 老格式：score/totalScore 即原始分
+  const rawTotal = Number(r.totalScore) || 0;
+  const pct = toPercent(rawScore, rawTotal);
+  return Object.assign({}, r, {
+    rawScore: rawScore,
+    rawTotal: rawTotal,
+    score: pct,
+    totalScore: 100,
+    passed: pct >= EXAM_CONFIG.passScore                    // 按百分制统一重判
+  });
+}
+
+// ==================== 抽题 ====================
+
+/** 判断题目是否为必答题（兼容 Excel/JSON 的多种写法，大小写不敏感） */
+function isRequiredQuestion(q) {
+  if (!q) return false;
+  const v = q.required;
+  if (v === true || v === 1) return true;
+  if (typeof v === 'string') {
+    const s = v.trim().toLowerCase();
+    return s === '1' || s === 'true' || s === '是' || s === 'y' || s === 'yes' || s === '√';
+  }
+  return false;
+}
+
+/** Fisher-Yates 洗牌（返回新数组，不修改入参） */
+function shuffleArray(arr) {
+  const a = (arr || []).slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const t = a[i]; a[i] = a[j]; a[j] = t;
+  }
+  return a;
+}
+
+/**
+ * 随机抽题（必答题优先保障）
+ * @param {Array}  allQuestions 全题库（题数无上限）
+ * @param {Number} count        需抽取题数
+ * @param {Number} requiredMin  至少抽中的必答题数；传 undefined 时回落到 EXAM_CONFIG.requiredMin；0 = 不启用
+ * @returns {Array} 按 id 升序排列的抽中题目（长度 = min(count, 题库长度)）
+ */
+function pickQuestions(allQuestions, count, requiredMin) {
+  const list = allQuestions || [];
+
+  // 1) 名额归一化：非法值/负数 → 0；超过题库长度 → 截断到题库长度
+  let n = Math.floor(Number(count));
+  if (!isFinite(n) || n < 0) n = 0;
+  if (n > list.length) n = list.length;
+  if (n === 0) return [];
+
+  // 2) 必答名额：回落到全局配置 → 钳制到 [0, 必答池大小, n]
+  let reqMin = Math.floor(Number(
+    requiredMin != null ? requiredMin : ((EXAM_CONFIG && EXAM_CONFIG.requiredMin) || 0)
+  ));
+  if (!isFinite(reqMin) || reqMin < 0) reqMin = 0;
+  const reqPool = list.filter(isRequiredQuestion);
+  if (reqPool.length === 0) reqMin = 0;              // 无必答题 → 退化为纯随机
+  reqMin = Math.min(reqMin, reqPool.length, n);
+
+  // 3) 先从必答池随机抽 reqMin 道
+  const picked = shuffleArray(reqPool).slice(0, reqMin);
+
+  // 4) 剩余名额从"所有未抽中题"（含未抽中的必答题）随机补足，保证总数恰为 n
+  if (picked.length < n) {
+    const pickedSet = new Set(picked);               // 用对象引用去重，规避 id 重复问题
+    const rest = shuffleArray(list.filter(q => !pickedSet.has(q)));
+    for (let i = 0; i < rest.length && picked.length < n; i++) picked.push(rest[i]);
+  }
+
+  return picked.sort((a, b) => a.id - b.id);
+}
+
+/** 判分（返回原始分 + 百分制双轨） */
 function gradeExam(pickedQuestions, userAnswers) {
-  let totalScore = 0, earnedScore = 0;
+  let rawScore = 0, rawTotal = 0;
   const details = [];
 
   pickedQuestions.forEach(q => {
     const userAns = (userAnswers[q.id] || []).slice().sort((a, b) => a - b);
     const correctAns = [...q.answer].sort((a, b) => a - b);
-    const score = q.score || (EXAM_CONFIG.defaultScore[q.type] || 10);
-    totalScore += score;
+    // 分值归一化：兼容字符串分值，且允许 0 分题（原写法 q.score || 10 会把 0 分题当 10 分）
+    const score = (q.score != null && q.score !== '' && !isNaN(Number(q.score)))
+      ? Number(q.score)
+      : (EXAM_CONFIG.defaultScore[q.type] || 10);
+    rawTotal += score;
 
-    // 精确匹配判断
     const correct = userAns.length === correctAns.length &&
                     userAns.every((v, i) => v === correctAns[i]);
 
-    if (correct) earnedScore += score;
+    if (correct) rawScore += score;
 
     details.push({
       id: q.id,
@@ -1960,14 +2147,18 @@ function gradeExam(pickedQuestions, userAnswers) {
       correct: correct,
       score: score,
       earned: correct ? score : 0,
-      analysis: q.analysis || ''
+      analysis: q.analysis || '',
+      required: isRequiredQuestion(q)
     });
   });
 
+  const percentScore = toPercent(rawScore, rawTotal);
   return {
-    score: earnedScore,
-    totalScore: totalScore,
-    passed: earnedScore >= EXAM_CONFIG.passScore,
+    rawScore: rawScore,          // 原始得分
+    rawTotal: rawTotal,          // 原始满分
+    score: percentScore,         // 百分制得分
+    totalScore: 100,             // 百分制满分恒为 100
+    passed: percentScore >= EXAM_CONFIG.passScore,
     details: details
   };
 }
