@@ -929,6 +929,7 @@ body {
       <button class="btn btn-success btn-sm" onclick="App.exportExcel()">导出 Excel</button>
       <button class="btn btn-danger btn-sm" onclick="App.clearRecords()">清空记录</button>
       <button class="btn btn-outline btn-sm" onclick="App.openConfigEditor()">参数设置</button>
+      <button class="btn btn-primary btn-sm" onclick="App.goHome()">返回首页</button>
     </div>
     <div class="btn-group">
       <button class="btn btn-primary btn-sm" onclick="App.startScanner()">扫码收录</button>
@@ -956,7 +957,7 @@ body {
     </div>
     <div class="form-group">
       <label for="cfgPickCount">每次抽取题数</label>
-      <input type="number" id="cfgPickCount" min="1" max="50">
+      <input type="number" id="cfgPickCount" min="1" max="999">
     </div>
     <div class="form-group">
       <label for="cfgCountdown">倒计时时长（秒，0为不限时）</label>
@@ -966,6 +967,12 @@ body {
       <input type="checkbox" id="cfgCountdownOn" style="width:auto;">
       <label for="cfgCountdownOn" style="margin:0;font-weight:500;">启用倒计时</label>
     </div>
+    <div class="form-group">
+      <label for="cfgRequiredMin">必答题最少抽中数（0=不启用）</label>
+      <input type="number" id="cfgRequiredMin" min="0" max="999">
+    </div>
+    <p class="text-sm text-muted" id="cfgPickHint" style="margin:0 0 6px;"></p>
+    <p class="text-sm text-muted" id="cfgRequiredHint" style="margin:0 0 6px;"></p>
     <div class="btn-group">
       <button class="btn btn-primary" onclick="App.saveConfig()">保存</button>
       <button class="btn btn-outline" onclick="App.closeConfigEditor()">取消</button>
@@ -1762,7 +1769,8 @@ const App = {
     const pickCount = parseInt(document.getElementById('cfgPickCount').value, 10);
     const countdownSeconds = parseInt(document.getElementById('cfgCountdown').value, 10);
     const countdownEnabled = document.getElementById('cfgCountdownOn').checked;
-    const requiredMin = parseInt(document.getElementById('cfgRequiredMin').value, 10);
+    const reqMinEl = document.getElementById('cfgRequiredMin');
+    const requiredMin = reqMinEl ? parseInt(reqMinEl.value, 10) : (EXAM_CONFIG.requiredMin || 0);
     if (isNaN(passScore) || passScore < 0) { alert('及格线无效'); return; }
     if (isNaN(pickCount) || pickCount < 1) { alert('抽题数无效（需 ≥ 1）'); return; }
     if (isNaN(countdownSeconds) || countdownSeconds < 0) { alert('倒计时无效'); return; }
