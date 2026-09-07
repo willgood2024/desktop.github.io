@@ -10,9 +10,14 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
 
-<!-- 配置与题库 -->
-<script src="config.js"></script>
-<script src="questions.js"></script>
+<!-- 配置与题库（带时间戳参数防止扫码端读到旧缓存；file:// 本地打开时查询串会被忽略，不影响使用） -->
+<script>
+(function () {
+  var v = Date.now();
+  document.write('<script src="config.js?v=' + v + '"><\/script>');
+  document.write('<script src="questions.js?v=' + v + '"><\/script>');
+})();
+</script>
 
 <style>
 /* ========== 基础重置与变量 ========== */
@@ -935,6 +940,7 @@ body {
       <button class="btn btn-primary btn-sm" onclick="App.startScanner()">扫码收录</button>
       <button class="btn btn-outline btn-sm" onclick="document.getElementById('importFile').click()">导入题库</button>
       <button class="btn btn-outline btn-sm" onclick="App.downloadTemplate()">下载模板</button>
+      <button class="btn btn-outline btn-sm" onclick="App.exportQuestionsFile()">导出题库</button>
       <button class="btn btn-outline btn-sm" onclick="App.restoreDefaultQuestions()">恢复默认题库</button>
     </div>
     <input type="file" id="importFile" accept=".json,.xlsx,.xls" style="display:none;" onchange="App.importQuestionsFromFile(this)">
@@ -1863,6 +1869,27 @@ const App = {
         if (Array.isArray(qs) && qs.length) window.QUESTIONS = qs;
       }
     } catch (e) {}
+  },
+
+  // ---- 导出当前题库为 questions.js（替换仓库文件推送后，所有扫码考生即用新题库）----
+  exportQuestionsFile() {
+    const qs = window.QUESTIONS || [];
+    if (!qs.length) { alert('题库为空，无法导出'); return; }
+    const header =
+      '/**\n' +
+      ' * 培训考试答题系统 - 题库\n' +
+      ' * 由管理页"导出题库"生成于 ' + new Date().toLocaleString() + '\n' +
+      ' * 共 ' + qs.length + ' 题。使用方法：用本文件替换仓库中的 questions.js，git push 后全员生效\n' +
+      ' */\n';
+    const body = 'window.QUESTIONS = ' + JSON.stringify(qs, null, 2) + ';\n';
+    const blob = new Blob([header + body], { type: 'text/javascript;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'questions.js';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
   },
 
   downloadTemplate() {
