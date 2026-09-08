@@ -943,6 +943,11 @@ body {
       <button class="btn btn-outline btn-sm" onclick="App.exportQuestionsFile()">导出题库</button>
       <button class="btn btn-outline btn-sm" onclick="App.restoreDefaultQuestions()">恢复默认题库</button>
     </div>
+    <div class="btn-group">
+      <button class="btn btn-primary btn-sm" onclick="App.syncToGitHub()">同步到服务器</button>
+      <button class="btn btn-outline btn-sm" onclick="App.openSyncSettings()">同步设置</button>
+    </div>
+    <div class="text-sm text-muted" id="syncStatus" style="margin-top:6px;"></div>
     <input type="file" id="importFile" accept=".json,.xlsx,.xls" style="display:none;" onchange="App.importQuestionsFromFile(this)">
     <div class="mt-16 admin-table-wrap" id="adminTableWrap">
       <div class="no-records">
@@ -986,6 +991,42 @@ body {
   </div>
 </div>
 
+<!-- ========== GitHub 同步设置弹窗 ========== -->
+<div class="modal-overlay" id="syncModal" style="display:none;">
+  <div class="modal-box">
+    <div class="view-title">GitHub 同步设置</div>
+    <div class="form-group">
+      <label for="syncOwner">GitHub 用户名 / 组织</label>
+      <input type="text" id="syncOwner" placeholder="如 zhangsan" autocomplete="off">
+    </div>
+    <div class="form-group">
+      <label for="syncRepo">仓库名</label>
+      <input type="text" id="syncRepo" placeholder="如 exam" autocomplete="off">
+    </div>
+    <div class="form-group">
+      <label for="syncBranch">分支</label>
+      <input type="text" id="syncBranch" placeholder="main">
+    </div>
+    <div class="form-group">
+      <label for="syncDir">文件所在子目录（仓库根目录留空）</label>
+      <input type="text" id="syncDir" placeholder="如 docs" autocomplete="off">
+    </div>
+    <div class="form-group">
+      <label for="syncToken">访问令牌（PAT，仅存本机浏览器）</label>
+      <input type="password" id="syncToken" placeholder="github_pat_... / ghp_..." autocomplete="off">
+    </div>
+    <p class="text-sm text-muted" style="margin:0 0 6px;">
+      令牌创建：GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens，
+      Repository access 仅勾选本仓库，Permissions 中 Contents 选 Read and write。
+      令牌只保存在本机，不会写入代码或上传。
+    </p>
+    <div class="btn-group">
+      <button class="btn btn-primary" onclick="App.saveSyncSettings()">保存</button>
+      <button class="btn btn-outline" onclick="App.closeSyncModal()">取消</button>
+    </div>
+  </div>
+</div>
+
 <!-- ========== 扫码收录弹窗 ========== -->
 <div class="scanner-overlay" id="scannerOverlay" style="display:none;">
   <div class="scanner-box">
@@ -1023,6 +1064,8 @@ const App = {
 
     // 欢迎页动态信息（题数/题型/及格线/必答提示）
     this.renderWelcomeInfo();
+    // 探测本地同步服务器（server.js）：可用则保存配置/题库后自动写回服务器文件
+    this.probeServerMode();
 
     // 管理入口：点击5次进入
     let clickCount = 0;
@@ -1081,7 +1124,10 @@ const App = {
       else localStorage.removeItem('exam_last_view');
     } catch (e) {}
     // 进管理页时刷新
-    if (name === 'admin') this.renderAdmin();
+    if (name === 'admin') {
+      this.renderAdmin();
+      if (this._serverMode) this.syncServerRecords();
+    }
   },
 
   // ---- 欢迎页动态信息（题数/题型/及格线/必答提示，随配置与题库同步）----
@@ -1481,6 +1527,21 @@ const App = {
     const statsEl = document.getElementById('adminStats');
     const tableWrap = document.getElementById('adminTableWrap');
 
+    // 同步状态提示
+    const syncStatus = document.getElementById('syncStatus');
+    if (syncStatus) {
+      let txt;
+      if (this._serverMode) {
+        txt = '✅ 本地同步模式：配置/题库保存自动写回；学员成绩回传自动汇总到本服务器，管理页每15秒自动刷新';
+      } else {
+        const sc = this._getSyncCfg ? this._getSyncCfg() : null;
+        txt = (sc && sc.token)
+          ? 'GitHub 同步：已配置，点「同步到服务器」推送（Pages 重建约1-2分钟生效）'
+          : '未连接同步通道：现场用可运行 node server.js（保存即同步）；外网用「同步设置」配置 GitHub 后一键推送';
+      }
+      syncStatus.textContent = txt;
+    }
+
     if (records.length === 0) {
       statsEl.innerHTML = '';
       tableWrap.innerHTML = '<div class="no-records"><span class="icon">&#128203;</span>暂无考试记录</div>';
@@ -1615,7 +1676,15 @@ const App = {
     if (!confirm('确定要清空所有考试记录吗？此操作不可恢复！')) return;
     if (!confirm('再次确认：清空后将无法恢复，是否继续？')) return;
     Store.clear();
+    if (this._serverMode) this.clearServerRecords();
     this.showView('admin');
+  },
+
+  clearServerRecords() {
+    fetch('/api/records', { method: 'DELETE' })
+      .then(r => r.json())
+      .then(d => { if (d && d.ok) showToast('服务器汇总成绩已一并清空'); })
+      .catch(() => {});
   },
 
   // ---- 成绩回传 ----
@@ -1650,7 +1719,9 @@ const App = {
       });
       hint.textContent = baseUrl.startsWith('file://')
         ? '提示：当前为本地文件，部署到服务器后管理员可扫码收录'
-        : '将此二维码/链接发给管理员即可收录成绩';
+        : (this._serverMode
+          ? '任何人扫码/打开链接，成绩都会自动汇总到服务器，管理员电脑实时可见'
+          : '将此二维码/链接发给管理员即可收录成绩');
     } else {
       // 题量过大时二维码容量不足，降级为链接回传（链接无长度限制）
       container.innerHTML = '<div class="qr-fallback">题量较大（' + ids.length +
@@ -1796,6 +1867,8 @@ const App = {
     this.saveConfigOverride();
     this.renderWelcomeInfo();
     this.closeConfigEditor();
+    // 本地同步模式：自动写回服务器 config.js，扫码端刷新即见
+    if (this._serverMode) this.postToServer('config.js', this.buildConfigJsText());
     alert('参数已保存（刷新页面后仍生效）');
   },
 
@@ -1844,6 +1917,8 @@ const App = {
           this.saveConfigOverride();
         }
         this.renderWelcomeInfo();
+        // 本地同步模式：自动写回服务器 questions.js，扫码端刷新即见
+        if (this._serverMode) this.postToServer('questions.js', this.buildQuestionsJsText());
         alert('成功导入 ' + questions.length + ' 道题目！');
         this.showView('admin');      // 导入后停留在管理页
       } catch (err) {
@@ -1875,14 +1950,7 @@ const App = {
   exportQuestionsFile() {
     const qs = window.QUESTIONS || [];
     if (!qs.length) { alert('题库为空，无法导出'); return; }
-    const header =
-      '/**\n' +
-      ' * 培训考试答题系统 - 题库\n' +
-      ' * 由管理页"导出题库"生成于 ' + new Date().toLocaleString() + '\n' +
-      ' * 共 ' + qs.length + ' 题。使用方法：用本文件替换仓库中的 questions.js，git push 后全员生效\n' +
-      ' */\n';
-    const body = 'window.QUESTIONS = ' + JSON.stringify(qs, null, 2) + ';\n';
-    const blob = new Blob([header + body], { type: 'text/javascript;charset=utf-8' });
+    const blob = new Blob([this.buildQuestionsJsText()], { type: 'text/javascript;charset=utf-8' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = 'questions.js';
@@ -1890,6 +1958,198 @@ const App = {
     a.click();
     document.body.removeChild(a);
     setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+  },
+
+  // ---- 生成 questions.js / config.js 文件内容（供导出、本地同步、GitHub 同步共用）----
+  buildQuestionsJsText() {
+    const qs = window.QUESTIONS || [];
+    const header =
+      '/**\n' +
+      ' * 培训考试答题系统 - 题库\n' +
+      ' * 由管理页生成/更新于 ' + new Date().toLocaleString() + '\n' +
+      ' * 共 ' + qs.length + ' 题。使用方法：替换仓库中的 questions.js 后 git push，全员生效\n' +
+      ' */\n';
+    return header + 'window.QUESTIONS = ' + JSON.stringify(qs, null, 2) + ';\n';
+  },
+
+  buildConfigJsText() {
+    const c = window.EXAM_CONFIG || {};
+    const header =
+      '/**\n' +
+      ' * 培训考试答题系统 - 全局配置\n' +
+      ' * 由管理页生成/更新于 ' + new Date().toLocaleString() + '\n' +
+      ' * 使用方法：替换仓库中的 config.js 后 git push，全员生效\n' +
+      ' */\n';
+    return header + 'window.EXAM_CONFIG = ' + JSON.stringify(c, null, 2) + ';\n';
+  },
+
+  // ---- 本地同步服务器（server.js）探测与写入 ----
+  probeServerMode() {
+    const self = this;
+    if (window.location.protocol === 'file:') { this._serverMode = false; return; }
+    fetch('/api/ping', { method: 'GET' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        self._serverMode = !!(d && d.ok);
+        if (self._serverMode) {
+          self._startServerPoll();
+          self.syncServerRecords();   // 连上后先做一次对账，把此前本机收录的补推上去
+        }
+        if (self._serverMode && document.getElementById('viewAdmin').classList.contains('active')) self.renderAdmin();
+      })
+      .catch(function () { self._serverMode = false; });
+  },
+
+  postToServer(target, content) {
+    const self = this;
+    fetch('/api/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target: target, content: content })
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      if (d && d.ok) showToast('已同步到本地服务器，扫码端刷新即见');
+      else showToast('同步到本地服务器失败：' + ((d && d.error) || '未知错误'));
+    }).catch(function (e) {
+      showToast('同步到本地服务器失败：' + e.message);
+    });
+  },
+
+  // ---- 成绩汇总到服务器（server.js）：谁扫码/打开回传链接都汇聚到管理员电脑 ----
+  postRecordToServer(record, silent) {
+    fetch('/api/records', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(record)
+    }).then(r => r.json()).then(d => {
+      if (d && d.ok && !silent) showToast('已汇总到服务器（共 ' + d.total + ' 条记录）');
+    }).catch(() => {});   // 推送失败不影响本机收录，稍后 syncServerRecords 会补推
+  },
+
+  // 双向对账：服务器有、本机没有 → 拉下来；本机有、服务器没有（如探测完成前收录的）→ 补推上去
+  syncServerRecords() {
+    const self = this;
+    fetch('/api/records', { method: 'GET' })
+      .then(r => r.json())
+      .then(d => {
+        if (!d || !d.ok || !Array.isArray(d.records)) return;
+        const serverIds = new Set(d.records.filter(Boolean).map(r => r.id));
+
+        // 1) 拉取：服务器有、本机没有
+        const local = Store.load();
+        const localIds = new Set(local.map(r => r.id));
+        let added = 0;
+        d.records.forEach(r => {
+          if (r && r.id && !localIds.has(r.id)) { local.push(normalizeRecord(r)); added++; }
+        });
+        if (added > 0) Store.save(local);
+
+        // 2) 补推：本机有、服务器没有
+        Store.load().forEach(r => {
+          if (!serverIds.has(r.id)) self.postRecordToServer(r, true);
+        });
+
+        if (added > 0 && document.getElementById('viewAdmin').classList.contains('active')) self.renderAdmin();
+      })
+      .catch(() => {});
+  },
+
+  // 管理页打开期间每 15 秒自动对账一次，新成绩实时出现
+  _startServerPoll() {
+    if (this._serverPoll) return;
+    const self = this;
+    this._serverPoll = setInterval(function () {
+      if (document.getElementById('viewAdmin').classList.contains('active')) self.syncServerRecords();
+    }, 15000);
+  },
+
+  // ---- GitHub 同步（Contents API 直推 config.js / questions.js 到仓库）----
+  _getSyncCfg() {
+    try { return JSON.parse(localStorage.getItem('exam_github_sync') || 'null'); } catch (e) { return null; }
+  },
+
+  openSyncSettings() {
+    const c = this._getSyncCfg() || {};
+    document.getElementById('syncOwner').value = c.owner || '';
+    document.getElementById('syncRepo').value = c.repo || '';
+    document.getElementById('syncBranch').value = c.branch || 'main';
+    document.getElementById('syncDir').value = c.dir || '';
+    document.getElementById('syncToken').value = c.token || '';
+    document.getElementById('syncModal').style.display = 'flex';
+  },
+
+  saveSyncSettings() {
+    const owner = document.getElementById('syncOwner').value.trim();
+    const repo = document.getElementById('syncRepo').value.trim();
+    const branch = document.getElementById('syncBranch').value.trim() || 'main';
+    const dir = document.getElementById('syncDir').value.trim().replace(/^\/+|\/+$/g, '');
+    const token = document.getElementById('syncToken').value.trim();
+    if (!owner || !repo || !token) { alert('用户名、仓库名和令牌均必填'); return; }
+    try {
+      localStorage.setItem('exam_github_sync', JSON.stringify({ owner: owner, repo: repo, branch: branch, dir: dir, token: token }));
+    } catch (e) {}
+    this.closeSyncModal();
+    if (document.getElementById('viewAdmin').classList.contains('active')) this.renderAdmin();
+    alert('同步设置已保存（仅存本机浏览器）');
+  },
+
+  closeSyncModal() {
+    document.getElementById('syncModal').style.display = 'none';
+  },
+
+  async syncToGitHub() {
+    const c = this._getSyncCfg();
+    if (!c || !c.owner || !c.repo || !c.token) {
+      this.openSyncSettings();
+      alert('请先填写 GitHub 仓库信息和访问令牌（令牌仅存本机）');
+      return;
+    }
+    if (!window.confirm('将把当前配置与题库提交到 GitHub 仓库 "' + c.owner + '/' + c.repo + '"，Pages 重建后（约1-2分钟）扫码端即可见新内容。继续？')) return;
+
+    const base = c.dir ? c.dir + '/' : '';
+    const files = [
+      { path: base + 'config.js', content: this.buildConfigJsText() },
+      { path: base + 'questions.js', content: this.buildQuestionsJsText() }
+    ];
+    const headers = {
+      'Authorization': 'Bearer ' + c.token,
+      'Accept': 'application/vnd.github+json',
+      'Content-Type': 'application/json'
+    };
+    const apiBase = 'https://api.github.com/repos/' + c.owner + '/' + c.repo + '/contents/';
+
+    try {
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i];
+        showToast('正在同步 ' + f.path + ' ...');
+        // 取现有文件 sha（不存在则为 404，新建即可）
+        let sha = null;
+        const getRes = await fetch(apiBase + encodeURIComponent(f.path) + '?ref=' + encodeURIComponent(c.branch), { headers: headers });
+        if (getRes.status === 200) sha = (await getRes.json()).sha;
+        else if (getRes.status !== 404) {
+          const err = await getRes.json().catch(function () { return {}; });
+          throw new Error('读取 ' + f.path + ' 失败：' + ((err && err.message) || getRes.status));
+        }
+        const putRes = await fetch(apiBase + encodeURIComponent(f.path), {
+          method: 'PUT',
+          headers: headers,
+          body: JSON.stringify({
+            message: '管理页同步更新考试配置与题库 (' + new Date().toLocaleString() + ')',
+            content: utf8ToBase64(f.content),
+            sha: sha,
+            branch: c.branch
+          })
+        });
+        if (!putRes.ok) {
+          const err = await putRes.json().catch(function () { return {}; });
+          throw new Error('提交 ' + f.path + ' 失败：' + ((err && err.message) || putRes.status));
+        }
+      }
+      showToast('已提交到 GitHub，等待 Pages 重建（约1-2分钟）');
+      alert('同步成功！Pages 重建完成后（约1-2分钟），手机刷新扫码页面即可看到最新配置和题库。');
+    } catch (e) {
+      showToast('GitHub 同步失败');
+      alert('GitHub 同步失败：' + e.message + '\n\n常见原因：令牌无效/过期、未勾选 Contents 写权限、仓库名或分支填错、网络无法访问 api.github.com。');
+    }
   },
 
   downloadTemplate() {
@@ -1910,6 +2170,10 @@ const App = {
 };
 
 // ==================== 成绩回传 / 跨设备收录 ====================
+
+function utf8ToBase64(str) {
+  return btoa(unescape(encodeURIComponent(str)));
+}
 
 function utf8ToBase64Url(str) {
   return btoa(unescape(encodeURIComponent(str)))
@@ -1993,6 +2257,8 @@ function collectResult(compact) {
     passed: passed
   };
   Store.add(fullRecord);
+  // 本地同步模式：同时推送到服务器汇总（任何设备扫码/打开链接都会汇聚到管理员电脑）
+  if (typeof App !== 'undefined' && App._serverMode) App.postRecordToServer(fullRecord);
   return true;
 }
 
