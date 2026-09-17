@@ -15,7 +15,7 @@ window.EXAM_CONFIG = {
   "countdownEnabled": true,
   "countdownSeconds": 300,
   "autoSubmitOnTimeout": true,
-  "baseUrl": "",
+  "baseUrl": "https://exam.mygod9771.de5.net/",
   "storageKey": "exam_records",
   "adminPin": ""
 };
