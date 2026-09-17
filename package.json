@@ -1,0 +1,10 @@
+{
+  "name": "training-exam",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "培训考试答题系统：EdgeOne Pages 静态站点 + Edge Functions(Blob) 成绩汇总后端",
+  "dependencies": {
+    "@edgeone/pages-blob": "latest"
+  }
+}
