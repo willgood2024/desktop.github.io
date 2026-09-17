@@ -1209,7 +1209,9 @@ const App = {
     const container = document.getElementById('qrcode');
     container.innerHTML = '';
 
-    const baseUrl = EXAM_CONFIG.baseUrl || window.location.href.split('#')[0].split('?')[0];
+    // 保留查询串（如 EdgeOne 预览链接的 ?eo_token=...&eo_time=...），仅去掉 hash
+    // 之前 .split('?')[0] 会把 token 截掉，导致扫码端 401
+    const baseUrl = EXAM_CONFIG.baseUrl || window.location.href.split('#')[0];
     const isFileProtocol = baseUrl.startsWith('file://');
 
     if (typeof QRCode !== 'undefined') {
@@ -1444,6 +1446,10 @@ const App = {
 
     // 存入 localStorage
     Store.add(record);
+
+    // 交卷即上传：本地/云端同步模式下直接推送成绩到服务器（管理页每15秒自动刷新可见）
+    // 回传二维码/链接保留作离线兜底
+    if (this._serverMode) this.postRecordToServer(record);
 
     // 渲染结果页
     this.renderResult(result, record);
