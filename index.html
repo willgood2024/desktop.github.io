@@ -1056,6 +1056,11 @@ const App = {
     elapsedSeconds: 0
   },
 
+  // ---- 同步后端状态（probeServerMode 探测后设置）----
+  _serverMode: false,   // 是否存在后端接口 /api/ping（本地 server.js 或 EdgeOne 函数）
+  _blobMode: false,     // 后端是否为 EdgeOne Blob 云端存储（不支持文件写回，配置更新走 GitHub）
+  _serverPoll: null,
+
   // ---- 初始化 ----
   init() {
     // 加载覆盖配置与题库（在线修改后持久化）
@@ -1532,7 +1537,9 @@ const App = {
     if (syncStatus) {
       let txt;
       if (this._serverMode) {
-        txt = '✅ 本地同步模式：配置/题库保存自动写回；学员成绩回传自动汇总到本服务器，管理页每15秒自动刷新';
+        txt = this._blobMode
+          ? '✅ 云端同步模式（EdgeOne + Blob）：学员成绩回传自动汇总，管理页每15秒自动刷新；配置/题库更新请用 GitHub 推送'
+          : '✅ 本地同步模式：配置/题库保存自动写回；学员成绩回传自动汇总到本服务器，管理页每15秒自动刷新';
       } else {
         const sc = this._getSyncCfg ? this._getSyncCfg() : null;
         txt = (sc && sc.token)
@@ -1986,21 +1993,30 @@ const App = {
   // ---- 本地同步服务器（server.js）探测与写入 ----
   probeServerMode() {
     const self = this;
+    this._serverMode = false;
+    this._blobMode = false;
     if (window.location.protocol === 'file:') { this._serverMode = false; return; }
     fetch('/api/ping', { method: 'GET' })
       .then(function (r) { return r.json(); })
       .then(function (d) {
         self._serverMode = !!(d && d.ok);
+        // storage:"blob" → EdgeOne 云端存储（成绩汇总到 Blob；配置/题库不能写回文件）
+        self._blobMode = !!(d && d.ok && d.storage === 'blob');
         if (self._serverMode) {
           self._startServerPoll();
           self.syncServerRecords();   // 连上后先做一次对账，把此前本机收录的补推上去
         }
         if (self._serverMode && document.getElementById('viewAdmin').classList.contains('active')) self.renderAdmin();
       })
-      .catch(function () { self._serverMode = false; });
+      .catch(function () { self._serverMode = false; self._blobMode = false; });
   },
 
   postToServer(target, content) {
+    // 云端（EdgeOne + Blob）不支持写回仓库文件：配置/题库请用 GitHub 推送更新
+    if (this._blobMode) {
+      showToast('当前为云端存储模式：配置/题库请用「同步到服务器」的 GitHub 推送更新');
+      return;
+    }
     const self = this;
     fetch('/api/save', {
       method: 'POST',
